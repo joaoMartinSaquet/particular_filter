@@ -90,11 +90,12 @@ void filter::predict(float u,float th)
     float dist = u;
     float angle = th;
 
-    float dx = dist*cos(angle) + dx_randn(engine);
-    float dy = dist*sin(angle) + dy_randn(engine);
+
 
     for(auto p = this->particle_list.begin();p!= this->particle_list.end();p++)
     {
+        float dx = dist*cos(angle) + dx_randn(engine);
+        float dy = dist*sin(angle) + dy_randn(engine);
         p->x -= dx;
         p->y -= dy;
         //std::cerr<<"weight predicted "<<p->weight<<std::endl;
@@ -110,11 +111,11 @@ void filter::update(std::vector<particle> measure,float Rx,float Ry)
     int i = 0;
     float closer_dist;
     float summ_weight=0;
-
-    std::normal_distribution<float> mx_randn(0,Rx);
-    std::normal_distribution<float> my_randn(0,Ry);
+    std::normal_distribution<float> mx_randn(0,0.06);
+    std::normal_distribution<float> my_randn(0,0.06);
     std::random_device seeder;
     std::mt19937 engine(seeder());
+
     for(auto p = this->particle_list.begin();p != this->particle_list.end();p++)
     {
         closer_dist = std::numeric_limits<float>::max();
@@ -145,12 +146,51 @@ void filter::update(std::vector<particle> measure,float Rx,float Ry)
 
     for(auto p = this->particle_list.begin();p != this->particle_list.end();p++)
         p->weight /= summ_weight;
+    
+   // TEST
+   /**
+    std::normal_distribution<float> mx_randn(0,0.06);
+    std::normal_distribution<float> my_randn(0,0.06);
+    std::random_device seeder;
+    std::mt19937 engine(seeder());
+    for(auto p = this->particle_list.begin();p != this->particle_list.end();p++)
+    {
+        closer_dist = std::numeric_limits<float>::max();
+        this->sumDist = 0;
+        float closerX,closerY;
+        for(particle m : measure)
+        {
+            float measure_x = m.x;
+            float measure_y = m.y;
+            float dist = sqrt( pow(measure_x - p->x,2)+pow(measure_y-p->y,2));
+            sumDist += dist;
+            if(closer_dist>=dist)
+            {
+                closer_dist=dist;
+                closerX = measure_x;
+                closerY = measure_y;
+            }
+
+        }
+        if(closer_dist == 0)
+            closer_dist = 1e-6; // to avoid 0 div   
+        p->weight *= this->probMesure(closer_dist,0,0.04) ;
+        //p->weight *= this->probMesure(closerX,closer_dist,Rx)+this->probMesure(closerY,closer_dist,Ry);
+        summ_weight += p->weight;   
+    }
+    
+   //normalize
+   for(auto p = this->particle_list.begin();p != this->particle_list.end();p++)
+   {
+        p->weight /= summ_weight;
+   }**/
 
 }
 
 void filter::resample(std::string method)
 {
-    
+    //Naive method is a bad choice because it choose not enough low weighted particle
+    // multimodial algorithm is weird 
     std::vector<particle> new_particle_list;
     double p;
     int j;
@@ -158,7 +198,7 @@ void filter::resample(std::string method)
     double size = this->particle_list.size();
 
     int sizeParticleMeaningfull;
-    std::normal_distribution<float> P(0,0.1); //var is 0.03m
+    std::normal_distribution<float> P(0,0.04); //var is 0.03m
     std::random_device seeder;
     std::mt19937 engine(seeder());
     float weightKeeped = 0;
@@ -176,7 +216,7 @@ void filter::resample(std::string method)
 
             }
 
-            treshold = (max-min)/2; // 1/size // adpat treshold with 1/meandistance
+            treshold = (max-min)/5; // 1/size // adpat treshold with 1/meandistance
             float meanX=0,meanY=0;
             //treshold = sumDist;
             for(int i=0;i <size ;i++)
@@ -202,7 +242,7 @@ void filter::resample(std::string method)
                 new_particle_list.push_back(p);
             }
 
-    }else if("multimodiall")
+    }else if(method=="multimodial")
     {
         std::vector<double> cum_sum;
         std::uniform_real_distribution<double> P(0.0,1.0);
@@ -215,19 +255,24 @@ void filter::resample(std::string method)
                 cum_sum.push_back(this->particle_list[i].weight);
             else
                 cum_sum.push_back(this->particle_list[i].weight + cum_sum[i-1]);
+            //std::cerr<<"cum summ "<<i<<" : "<<cum_sum[i]<<std::endl;
         }
-    
-        for(int i=0;i<int(this->particle_list.size()*0.9);i++)
+        //std::cerr<<"cum size "<<cum_sum.size()<<" particle list size "<<particle_list.size()<<std::endl;
+        for(int i=0;i<int(this->particle_list.size());i++)
         {
             p = P(engine);
+            //std::cerr<<"p : "<<p<<std::endl;
             j=0;
             for(double c: cum_sum)
-            {
-                if(p <= c)
+            {   
+                //std::cerr<<"c : "<<c<<" j :"<<j<<std::endl;
+                if(c > p)
                 {
-                    new_particle_list.push_back(this->particle_list[i]);
+                    //std::cerr<<" indice selectionnée "<<j<<std::endl;
+                    new_particle_list.push_back(this->particle_list[j]);
                     break;
                 }
+                j++;
             }
         }
 
@@ -236,13 +281,46 @@ void filter::resample(std::string method)
         for(int i = 0;i<numberParticleToCreate;i++)
         {
             particle p = new_particle_list[i%sizeParticleMeaningfull];
-            p.x += P(engine);
-            p.y += P(engine);
+            //p.x += P(engine);
+            //p.y += P(engine);
             p.weight = (1-weightKeeped)/numberParticleToCreate;
             new_particle_list.push_back(p);
         }
     }
+    else if(method=="systematic")
+    {   
+        std::vector<double> cum_sum;
+      
+        std::random_device seeder;
+        std::mt19937 engine(seeder());
+        int n = this->particle_list.size();
+        std::uniform_real_distribution<double> P(0.0,double(1.0/n));
+        double u;
+        for(int i=0;i < n;i++)
+        {
+            if(i==0)
+                cum_sum.push_back(this->particle_list[i].weight);
+            else
+                cum_sum.push_back(this->particle_list[i].weight + cum_sum[i-1]);
+        }
+        u = P(engine);
+        std::cerr<<"u "<<u<<std::endl;
+        std::cerr<<"c0 "<<cum_sum[n-1]<<std::endl;
+        
+        int i = 0;
+        for(int j = 0;j<n;j++)
+        {
+            while(u>cum_sum[i])
+                i++;
+            new_particle_list.push_back(this->particle_list[i]);
+            u = u + double(1/n);
+            
+        }
+
+
+    }
     //std::cerr<<"old particle size "<<this->particle_list.size()<<" new particle size "<<new_particle_list.size()<<std::endl;
+    std::cerr<<"new Particle List size "<<new_particle_list.size()<<std::endl;
     this->particle_list = new_particle_list;
 //    for(auto part :new_particle_list)
 //        std::cerr<<"keeped particle "<<part.weight<<std::endl;
@@ -251,11 +329,11 @@ void filter::resample(std::string method)
 
 void filter::estimate()
 {
-    std::vector<float> meanClusterX;
-    std::vector<float> meanClusterY;
-    std::vector<float> varClusterX;
-    std::vector<float> varClusterY; 
     float meanX,meanY,varX,varY;
+    meanX = 0;
+    meanY = 0;
+    varX = 0;
+    varY = 0;
     int N = 0; //particle number
     float weightedSummX,weightedSummY;
 
@@ -265,12 +343,14 @@ void filter::estimate()
         float weight=p.weight;//p.weight
         //std::cerr<<"weight "<<weight<<std::endl;
         N += 1;
-        meanX += p.x;
-        meanY += p.y;
+        meanX += (float)p.x;
+        meanY += (float)p.y;
+        if(p.x > 10)
+            std::cerr<<"pX,Y   "<<p.x<<" ,"<<p.y<<std::endl;
         weightedSummX +=  weight*p.x;
         weightedSummY +=  weight*p.y;
     }
-
+   // std::cerr<<"mean "<<meanX<<", "<<meanY<<std::endl;
     meanX /= N;
     meanY /= N;
     
@@ -361,8 +441,8 @@ int main() {
     
     std::vector<particle> tree_position;
     particle tmp;
-    tmp.x = 3;
-    tmp.y = 5;
+    tmp.x = 0;
+    tmp.y = 0;
     tmp.weight = 0;
     tree_position.push_back(tmp);
     tmp.x = 0;
@@ -380,50 +460,38 @@ int main() {
 
     
 
-    for(int i=0;i<16;i++)
+    for(int i=0;i<30;i++)
     {   
-
+        std::cerr<<" ------------------------ ITERATION " +std::to_string(i) +" --------------------------------"<<std::endl;
         f.estimate();
+        f.showEstimate();
         plt::clf();
         plt::xlim(-7,7);
         plt::ylim(-7,7);
         plt::title("particular filter evolution" +  std::to_string(i));
 
-        if( !(i%5))
-        {
-            f.predict(1,1.57);
-            for(auto it=tree_position.begin();it!=tree_position.end();it++)
-            {
-                it->y -= 1;
-            }
-            //f.showParticle("prediction"," ");
-        }
         
         f.update(tree_position,0.01,0.01);
-
+        
         
         f.showParticle("base"," ");
+        f.predict(0,0);
         showMeasure(tree_position);
 
-        f.showEstimate();
-        std::cerr<<"show Estimate ";
+
         plt::pause(t);
         plt::clf();
         plt::xlim(-7,7);
         plt::ylim(-7,7);
         std::cerr<<"Neff "<<f.calcNeff();
-        //if(f.calcNeff()<f.get_size())
-            f.resample("naive");
+        if(f.calcNeff()<f.get_size()/2)
+            f.resample("multimodial");
             f.showParticle(" "," ");
             showMeasure(tree_position);
-
             f.resetWeight();
-        std::cerr<<"Neff after resample"<<f.calcNeff();
         //f.showParticle("resample"," ");
 
-        f.estimate();
-
-        plt::pause(t);
+        plt::pause(1);
         
     }
     plt::show();
